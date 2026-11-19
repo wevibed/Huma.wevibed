@@ -1,37 +1,73 @@
-name: Extract Showroom ZIP
+
+name: Replace Repository With HUMA Showroom
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  extract:
+  replace:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up unzip
-        run: sudo apt-get update && sudo apt-get install -y unzip
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
 
-      - name: Extract ZIP
+      - name: Extract HUMA ZIP
         run: |
-          mkdir -p extracted
-          unzip -o huma-showroom.zip -d extracted
-          cp -r extracted/. .
-          rm -rf extracted
+          mkdir -p "$RUNNER_TEMP/huma-source"
+          unzip -q huma-showroom.zip -d "$RUNNER_TEMP/huma-source"
 
-      - name: Commit extracted files
+          SOURCE_DIR=$(find "$RUNNER_TEMP/huma-source" \
+            -type f -name package.json -printf '%h\n' | head -n 1)
+
+          if [ -z "$SOURCE_DIR" ]; then
+            echo "ERROR: Could not find project package.json"
+            exit 1
+          fi
+
+          if [ ! -f "$SOURCE_DIR/index.html" ]; then
+            echo "ERROR: Invalid project structure"
+            exit 1
+          fi
+
+          echo "Found project: $SOURCE_DIR"
+          echo "SOURCE_DIR=$SOURCE_DIR" >> "$GITHUB_ENV"
+
+      - name: Validate project build
+        run: |
+          cd "$SOURCE_DIR"
+          npm install
+          npm run build
+
+          rm -rf node_modules dist
+
+      - name: Replace repository contents
+        run: |
+          find . -mindepth 1 -maxdepth 1 \
+            ! -name '.git' \
+            ! -name '.github' \
+            -exec rm -rf {} +
+
+          cp -a "$SOURCE_DIR"/. .
+
+      - name: Commit and push replacement
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
           git add -A
-          git reset -- huma-showroom.zip
-          git diff --cached --quiet || git commit -m "Extract Huma showroom files"
-          git push
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Replace repository with HUMA showroom project"
+            git push origin HEAD:main
+          fi
